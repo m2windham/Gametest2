@@ -255,17 +255,16 @@ def handle_geometry_script(params):
 @tool(name="clear_scene", description="Safely delete all objects in the scene and purge orphans.", args=[])
 def handle_clear_scene(params):
     """Safely delete all objects in the scene and purge orphans."""
-    log("[MCP] Clearing scene...")
+    log("[MCP] Clearing scene (robust method)...")
     try:
-        # Deselect all, then select all
-        bpy.ops.object.select_all(action='DESELECT')
+        # Remove all objects directly
         for obj in list(bpy.data.objects):
             try:
-                obj.select_set(True)
+                bpy.data.objects.remove(obj, do_unlink=True)
+                log(f"[MCP] Removed object: {obj.name}")
             except Exception as e:
-                log(f"[MCP] Error selecting object {obj.name}: {e}")
-        bpy.ops.object.delete()
-        log("[MCP] All objects deleted.")
+                log(f"[MCP] Error removing object {obj.name}: {e}")
+        log("[MCP] All objects removed from bpy.data.objects.")
         # Purge orphans with delay
         for i in range(3):
             try:
@@ -273,7 +272,7 @@ def handle_clear_scene(params):
                 log(f"[MCP] Orphans purged (pass {i+1})")
             except Exception as e:
                 log(f"[MCP] Orphan purge error: {e}")
-        return {"status": "ok", "result": "Scene cleared"}
+        return {"status": "ok", "result": "Scene cleared (robust)"}
     except Exception as e:
         log(f"[MCP] Scene clear error: {e}")
         return {"status": "error", "message": str(e)}
