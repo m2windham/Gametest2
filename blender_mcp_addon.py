@@ -126,6 +126,29 @@ def tool(name=None, description=None, args=None):
     return decorator
 
 # --- Tool Handlers (with docstrings for LLMs) ---
+# Utility: Get mesh primitive operator from shape name
+MESH_PRIMITIVE_OPS = {
+    # All Blender mesh primitives as of 3.x
+    "cube": bpy.ops.mesh.primitive_cube_add,
+    "plane": bpy.ops.mesh.primitive_plane_add,
+    "circle": bpy.ops.mesh.primitive_circle_add,
+    "uv_sphere": bpy.ops.mesh.primitive_uv_sphere_add,
+    "ico_sphere": bpy.ops.mesh.primitive_ico_sphere_add,
+    "cylinder": bpy.ops.mesh.primitive_cylinder_add,
+    "cone": bpy.ops.mesh.primitive_cone_add,
+    "torus": bpy.ops.mesh.primitive_torus_add,
+    "grid": bpy.ops.mesh.primitive_grid_add,
+    "monkey": bpy.ops.mesh.primitive_monkey_add,
+    # Aliases for user convenience
+    "sphere": bpy.ops.mesh.primitive_uv_sphere_add,  # alias
+    "icosphere": bpy.ops.mesh.primitive_ico_sphere_add,  # alias
+}
+# Keep this in sync with Blender's bpy.ops.mesh primitives!
+MESH_PRIMITIVE_NAMES = set(MESH_PRIMITIVE_OPS.keys())
+
+def get_mesh_primitive_op(shape):
+    return MESH_PRIMITIVE_OPS.get(shape)
+
 @tool(name="create_object", description="Create a new object in the scene. Supports all Blender primitive types.", args=[
     {"name": "name", "type": "str", "desc": "Object name"},
     {"name": "shape", "type": "str", "desc": "Primitive type (cube, sphere, cylinder, cone, torus, plane, circle, grid, monkey, bezier_curve, nurbs_curve, path, nurbs_surface, metaball, text, lattice, empty, light, camera, speaker, armature, grease_pencil, etc.)"},
@@ -137,61 +160,27 @@ def handle_create_object(params):
     shape = params.get("shape", None)
     kwargs = params.get("kwargs", {})
     obj = None
-    mesh_primitives = {"cube", "plane", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "circle", "grid", "monkey"}
     if shape:
         shape = shape.lower()
-        if shape in mesh_primitives:
-            # Use data API for mesh primitives
-            import math
-            location = kwargs.get("location", [0, 0, 0])
-            scale = kwargs.get("scale", [1, 1, 1])
-            size = kwargs.get("size", 1)
-            if shape == "cube":
-                mesh = bpy.data.meshes.new(name)
-                from mathutils import Vector
-                verts = [
-                    Vector((-0.5, -0.5, -0.5)), Vector((0.5, -0.5, -0.5)),
-                    Vector((0.5, 0.5, -0.5)), Vector((-0.5, 0.5, -0.5)),
-                    Vector((-0.5, -0.5, 0.5)), Vector((0.5, -0.5, 0.5)),
-                    Vector((0.5, 0.5, 0.5)), Vector((-0.5, 0.5, 0.5)),
-                ]
-                faces = [
-                    [0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4],
-                    [2, 3, 7, 6], [1, 2, 6, 5], [0, 3, 7, 4]
-                ]
-                mesh.from_pydata([v * size for v in verts], [], faces)
-                mesh.update()
-                obj = bpy.data.objects.new(name, mesh)
-            elif shape == "plane":
-                mesh = bpy.data.meshes.new(name)
-                from mathutils import Vector
-                s = size / 2
-                verts = [Vector((-s, -s, 0)), Vector((s, -s, 0)), Vector((s, s, 0)), Vector((-s, s, 0))]
-                faces = [[0, 1, 2, 3]]
-                mesh.from_pydata(verts, [], faces)
-                mesh.update()
-                obj = bpy.data.objects.new(name, mesh)
-            else:
-                # Fallback to operator for other mesh primitives
-                op_map = {
-                    "uv_sphere": bpy.ops.mesh.primitive_uv_sphere_add,
-                    "ico_sphere": bpy.ops.mesh.primitive_ico_sphere_add,
-                    "cylinder": bpy.ops.mesh.primitive_cylinder_add,
-                    "cone": bpy.ops.mesh.primitive_cone_add,
-                    "torus": bpy.ops.mesh.primitive_torus_add,
-                    "circle": bpy.ops.mesh.primitive_circle_add,
-                    "grid": bpy.ops.mesh.primitive_grid_add,
-                    "monkey": bpy.ops.mesh.primitive_monkey_add,
-                }
-                op = op_map.get(shape)
-                if op:
+        if shape in MESH_PRIMITIVE_NAMES:
+            # Use operator for all mesh primitives (robust, future-proof)
+            op = get_mesh_primitive_op(shape)
+            if op:
+                try:
                     op(**kwargs)
                     obj = bpy.context.active_object
-                else:
-                    return {"status": "error", "message": f"Unsupported mesh primitive: {shape}"}
+                except Exception as e:
+                    log(f"[MCP] Error creating mesh primitive {shape}: {e}")
+                    return {"status": "error", "message": f"Error creating mesh primitive {shape}: {e}"}
+            else:
+                log(f"[MCP] Mesh primitive operator not found for: {shape}")
+                return {"status": "error", "message": f"Mesh primitive operator not found for: {shape}"}
             if obj:
-                obj.location = location
-                obj.scale = scale
+                # Set location/scale after creation for consistency
+                if "location" in kwargs:
+                    obj.location = kwargs["location"]
+                if "scale" in kwargs:
+                    obj.scale = kwargs["scale"]
                 bpy.context.scene.collection.objects.link(obj)
                 obj.name = name
         else:
@@ -235,20 +224,16 @@ def handle_create_object(params):
                     if shape == "lattice":
                         op(type='LATTICE', **kwargs)
                     elif shape == "light":
-                        # Only pass operator-accepted args
                         op_type = kwargs.get('type', 'POINT')
                         op(location=kwargs.get('location', [0,0,0]), type=op_type)
                         obj = bpy.context.active_object
-                        # Set extra properties after creation
-                        if obj:
-                            if 'rotation_euler' in kwargs:
-                                obj.rotation_euler = kwargs['rotation_euler']
+                        if obj and 'rotation_euler' in kwargs:
+                            obj.rotation_euler = kwargs['rotation_euler']
                     elif shape == "camera":
                         op(location=kwargs.get('location', [0,0,0]))
                         obj = bpy.context.active_object
-                        if obj:
-                            if 'rotation_euler' in kwargs:
-                                obj.rotation_euler = kwargs['rotation_euler']
+                        if obj and 'rotation_euler' in kwargs:
+                            obj.rotation_euler = kwargs['rotation_euler']
                     elif shape == "empty":
                         op(type=kwargs.get('type', 'PLAIN_AXES'), **kwargs)
                         obj = bpy.context.active_object
@@ -258,10 +243,13 @@ def handle_create_object(params):
                     if obj:
                         obj.name = name
                 else:
+                    log(f"[MCP] Unsupported shape requested: {shape}")
                     return {"status": "error", "message": f"Unsupported shape: {shape}"}
             except Exception as e:
+                log(f"[MCP] Error creating {shape}: {e}")
                 return {"status": "error", "message": f"Error creating {shape}: {e}"}
     else:
+        log("[MCP] No shape specified for create_object")
         mesh = bpy.data.meshes.new(name)
         obj = bpy.data.objects.new(name, mesh)
         bpy.context.scene.collection.objects.link(obj)

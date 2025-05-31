@@ -2,6 +2,7 @@ import socket
 import json
 import time
 import random
+import math
 
 HOST = 'localhost'
 PORT = 9876  # Match your Blender MCP port
@@ -51,10 +52,10 @@ def main():
     time.sleep(1)
 
     # 3. Create a grid of cubes (city buildings)
-    grid_size = 10
-    spacing = 4
-    min_height = 2
-    max_height = 12
+    grid_size = 3
+    spacing = 1.5
+    min_height = 1
+    max_height = 3
     for x in range(-grid_size//2, grid_size//2):
         for y in range(-grid_size//2, grid_size//2):
             height = random.uniform(min_height, max_height)
@@ -73,7 +74,7 @@ def main():
             })
             check_response(resp, name)
             print(f'Created {name}:', resp)
-            time.sleep(1)
+            time.sleep(0.3)
 
     # 3b. Add roads (horizontal and vertical planes)
     print('Adding roads...')
@@ -95,7 +96,7 @@ def main():
         })
         check_response(resp, f'Road_H_{i}')
         print(f'Created Road_H_{i}:', resp)
-        time.sleep(1)
+        time.sleep(0.5)
         # Vertical roads (Y axis)
         resp = send_command(sock, {
             "type": "create_object",
@@ -111,11 +112,11 @@ def main():
         })
         check_response(resp, f'Road_V_{i}')
         print(f'Created Road_V_{i}:', resp)
-        time.sleep(1)
+        time.sleep(0.5)
 
     # 3c. Add cars (small cubes or cylinders on roads)
     print('Adding cars...')
-    num_cars = 20
+    num_cars = 3
     for i in range(num_cars):
         road_x = random.randint(-grid_size//2, grid_size//2-1)
         road_y = random.randint(-grid_size//2, grid_size//2-1)
@@ -142,11 +143,11 @@ def main():
         })
         check_response(resp, car_name)
         print(f'Created {car_name}:', resp)
-        time.sleep(1)
+        time.sleep(0.5)
 
     # 3d. Add props (trees, cones, etc.)
     print('Adding props...')
-    num_trees = 15
+    num_trees = 2
     for i in range(num_trees):
         x = random.uniform(-road_length/2, road_length/2)
         y = random.uniform(-road_length/2, road_length/2)
@@ -165,7 +166,7 @@ def main():
         })
         check_response(resp, tree_name)
         print(f'Created {tree_name}:', resp)
-        time.sleep(1)
+        time.sleep(0.3)
         # Add trunk (cylinder)
         trunk_name = f"Trunk_{i}"
         resp = send_command(sock, {
@@ -181,8 +182,8 @@ def main():
         })
         check_response(resp, trunk_name)
         print(f'Created {trunk_name}:', resp)
-        time.sleep(1)
-    num_cones = 10
+        time.sleep(0.3)
+    num_cones = 1
     for i in range(num_cones):
         x = random.uniform(-road_length/2, road_length/2)
         y = random.uniform(-road_length/2, road_length/2)
@@ -201,7 +202,7 @@ def main():
         })
         check_response(resp, cone_name)
         print(f'Created {cone_name}:', resp)
-        time.sleep(1)
+        time.sleep(0.3)
 
     # 4. Add a sun light
     print('Adding sun light...')
@@ -218,12 +219,17 @@ def main():
 
     # 5. Add a camera
     print('Adding camera...')
+    # Isometric camera: 45 deg around Z, ~35.264 deg down X
+    iso_angle = math.radians(35.264)
     resp = send_command(sock, {
         "type": "create_object",
         "params": {
             "shape": "camera",
             "name": "CityCamera",
-            "kwargs": {"location": [0, -grid_size * spacing, max_height * 2], "rotation_euler": [1.2, 0, 0]}
+            "kwargs": {
+                "location": [6, -6, 6],
+                "rotation_euler": [iso_angle, 0, math.radians(45)]
+            }
         }
     })
     print('Response:', resp)
