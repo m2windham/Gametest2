@@ -132,76 +132,135 @@ def tool(name=None, description=None, args=None):
     {"name": "kwargs", "type": "dict", "desc": "Additional operator arguments (optional)"}
 ])
 def handle_create_object(params):
-    """Create a new object in the scene. Supports all Blender primitive types via the 'shape' parameter. Optionally pass operator kwargs."""
+    """Create a new object in the scene. Uses data API for mesh primitives for headless/background safety."""
     name = params.get("name", "Object")
     shape = params.get("shape", None)
     kwargs = params.get("kwargs", {})
     obj = None
+    mesh_primitives = {"cube", "plane", "uv_sphere", "ico_sphere", "cylinder", "cone", "torus", "circle", "grid", "monkey"}
     if shape:
         shape = shape.lower()
-        primitive_ops = {
-            # Mesh
-            "cube": bpy.ops.mesh.primitive_cube_add,
-            "uv_sphere": bpy.ops.mesh.primitive_uv_sphere_add,
-            "ico_sphere": bpy.ops.mesh.primitive_ico_sphere_add,
-            "cylinder": bpy.ops.mesh.primitive_cylinder_add,
-            "cone": bpy.ops.mesh.primitive_cone_add,
-            "torus": bpy.ops.mesh.primitive_torus_add,
-            "plane": bpy.ops.mesh.primitive_plane_add,
-            "circle": bpy.ops.mesh.primitive_circle_add,
-            "grid": bpy.ops.mesh.primitive_grid_add,
-            "monkey": bpy.ops.mesh.primitive_monkey_add,
-            # Curve
-            "bezier_curve": bpy.ops.curve.primitive_bezier_curve_add,
-            "bezier_circle": bpy.ops.curve.primitive_bezier_circle_add,
-            "nurbs_curve": bpy.ops.curve.primitive_nurbs_curve_add,
-            "nurbs_circle": bpy.ops.curve.primitive_nurbs_circle_add,
-            "path": bpy.ops.curve.primitive_nurbs_path_add,
-            # Surface
-            "nurbs_surface": bpy.ops.surface.primitive_nurbs_surface_surface_add,
-            "nurbs_surface_circle": bpy.ops.surface.primitive_nurbs_surface_circle_add,
-            "nurbs_surface_curve": bpy.ops.surface.primitive_nurbs_surface_curve_add,
-            "nurbs_surface_cylinder": bpy.ops.surface.primitive_nurbs_surface_cylinder_add,
-            "nurbs_surface_sphere": bpy.ops.surface.primitive_nurbs_surface_sphere_add,
-            "nurbs_surface_torus": bpy.ops.surface.primitive_nurbs_surface_torus_add,
-            # Metaball
-            "metaball": bpy.ops.object.metaball_add,
-            # Text
-            "text": bpy.ops.object.text_add,
-            # Lattice
-            "lattice": bpy.ops.object.add,  # type='LATTICE'
-            # Empty
-            "empty": bpy.ops.object.empty_add,
-            # Light
-            "light": bpy.ops.object.light_add,
-            # Camera
-            "camera": bpy.ops.object.camera_add,
-            # Speaker
-            "speaker": bpy.ops.object.speaker_add,
-            # Armature
-            "armature": bpy.ops.object.armature_add,
-            # Grease Pencil
-            "grease_pencil": bpy.ops.object.gpencil_add,
-        }
-        op = primitive_ops.get(shape)
-        try:
-            if op:
-                # Some ops require type argument
-                if shape == "lattice":
-                    op(type='LATTICE', **kwargs)
-                elif shape == "light":
-                    op(type=kwargs.get('type', 'POINT'), **kwargs)
-                elif shape == "empty":
-                    op(type=kwargs.get('type', 'PLAIN_AXES'), **kwargs)
-                else:
-                    op(**kwargs)
-                obj = bpy.context.active_object
-                if obj:
-                    obj.name = name
+        if shape in mesh_primitives:
+            # Use data API for mesh primitives
+            import math
+            location = kwargs.get("location", [0, 0, 0])
+            scale = kwargs.get("scale", [1, 1, 1])
+            size = kwargs.get("size", 1)
+            if shape == "cube":
+                mesh = bpy.data.meshes.new(name)
+                from mathutils import Vector
+                verts = [
+                    Vector((-0.5, -0.5, -0.5)), Vector((0.5, -0.5, -0.5)),
+                    Vector((0.5, 0.5, -0.5)), Vector((-0.5, 0.5, -0.5)),
+                    Vector((-0.5, -0.5, 0.5)), Vector((0.5, -0.5, 0.5)),
+                    Vector((0.5, 0.5, 0.5)), Vector((-0.5, 0.5, 0.5)),
+                ]
+                faces = [
+                    [0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4],
+                    [2, 3, 7, 6], [1, 2, 6, 5], [0, 3, 7, 4]
+                ]
+                mesh.from_pydata([v * size for v in verts], [], faces)
+                mesh.update()
+                obj = bpy.data.objects.new(name, mesh)
+            elif shape == "plane":
+                mesh = bpy.data.meshes.new(name)
+                from mathutils import Vector
+                s = size / 2
+                verts = [Vector((-s, -s, 0)), Vector((s, -s, 0)), Vector((s, s, 0)), Vector((-s, s, 0))]
+                faces = [[0, 1, 2, 3]]
+                mesh.from_pydata(verts, [], faces)
+                mesh.update()
+                obj = bpy.data.objects.new(name, mesh)
             else:
-                return {"status": "error", "message": f"Unsupported shape: {shape}"}
-        except Exception as e:
-            return {"status": "error", "message": f"Error creating {shape}: {e}"}
+                # Fallback to operator for other mesh primitives
+                op_map = {
+                    "uv_sphere": bpy.ops.mesh.primitive_uv_sphere_add,
+                    "ico_sphere": bpy.ops.mesh.primitive_ico_sphere_add,
+                    "cylinder": bpy.ops.mesh.primitive_cylinder_add,
+                    "cone": bpy.ops.mesh.primitive_cone_add,
+                    "torus": bpy.ops.mesh.primitive_torus_add,
+                    "circle": bpy.ops.mesh.primitive_circle_add,
+                    "grid": bpy.ops.mesh.primitive_grid_add,
+                    "monkey": bpy.ops.mesh.primitive_monkey_add,
+                }
+                op = op_map.get(shape)
+                if op:
+                    op(**kwargs)
+                    obj = bpy.context.active_object
+                else:
+                    return {"status": "error", "message": f"Unsupported mesh primitive: {shape}"}
+            if obj:
+                obj.location = location
+                obj.scale = scale
+                bpy.context.scene.collection.objects.link(obj)
+                obj.name = name
+        else:
+            # Non-mesh primitives: use operator as before
+            primitive_ops = {
+                # Curve
+                "bezier_curve": bpy.ops.curve.primitive_bezier_curve_add,
+                "bezier_circle": bpy.ops.curve.primitive_bezier_circle_add,
+                "nurbs_curve": bpy.ops.curve.primitive_nurbs_curve_add,
+                "nurbs_circle": bpy.ops.curve.primitive_nurbs_circle_add,
+                "path": bpy.ops.curve.primitive_nurbs_path_add,
+                # Surface
+                "nurbs_surface": bpy.ops.surface.primitive_nurbs_surface_surface_add,
+                "nurbs_surface_circle": bpy.ops.surface.primitive_nurbs_surface_circle_add,
+                "nurbs_surface_curve": bpy.ops.surface.primitive_nurbs_surface_curve_add,
+                "nurbs_surface_cylinder": bpy.ops.surface.primitive_nurbs_surface_cylinder_add,
+                "nurbs_surface_sphere": bpy.ops.surface.primitive_nurbs_surface_sphere_add,
+                "nurbs_surface_torus": bpy.ops.surface.primitive_nurbs_surface_torus_add,
+                # Metaball
+                "metaball": bpy.ops.object.metaball_add,
+                # Text
+                "text": bpy.ops.object.text_add,
+                # Lattice
+                "lattice": bpy.ops.object.add,  # type='LATTICE'
+                # Empty
+                "empty": bpy.ops.object.empty_add,
+                # Light
+                "light": bpy.ops.object.light_add,
+                # Camera
+                "camera": bpy.ops.object.camera_add,
+                # Speaker
+                "speaker": bpy.ops.object.speaker_add,
+                # Armature
+                "armature": bpy.ops.object.armature_add,
+                # Grease Pencil
+                "grease_pencil": bpy.ops.object.gpencil_add,
+            }
+            op = primitive_ops.get(shape)
+            try:
+                if op:
+                    if shape == "lattice":
+                        op(type='LATTICE', **kwargs)
+                    elif shape == "light":
+                        # Only pass operator-accepted args
+                        op_type = kwargs.get('type', 'POINT')
+                        op(location=kwargs.get('location', [0,0,0]), type=op_type)
+                        obj = bpy.context.active_object
+                        # Set extra properties after creation
+                        if obj:
+                            if 'rotation_euler' in kwargs:
+                                obj.rotation_euler = kwargs['rotation_euler']
+                    elif shape == "camera":
+                        op(location=kwargs.get('location', [0,0,0]))
+                        obj = bpy.context.active_object
+                        if obj:
+                            if 'rotation_euler' in kwargs:
+                                obj.rotation_euler = kwargs['rotation_euler']
+                    elif shape == "empty":
+                        op(type=kwargs.get('type', 'PLAIN_AXES'), **kwargs)
+                        obj = bpy.context.active_object
+                    else:
+                        op(**kwargs)
+                    obj = bpy.context.active_object
+                    if obj:
+                        obj.name = name
+                else:
+                    return {"status": "error", "message": f"Unsupported shape: {shape}"}
+            except Exception as e:
+                return {"status": "error", "message": f"Error creating {shape}: {e}"}
     else:
         mesh = bpy.data.meshes.new(name)
         obj = bpy.data.objects.new(name, mesh)
