@@ -126,14 +126,90 @@ def tool(name=None, description=None, args=None):
     return decorator
 
 # --- Tool Handlers (with docstrings for LLMs) ---
-@tool(name="create_object", description="Create a new object in the scene.", args=[{"name": "name", "type": "str", "desc": "Object name"}])
+@tool(name="create_object", description="Create a new object in the scene. Supports all Blender primitive types.", args=[
+    {"name": "name", "type": "str", "desc": "Object name"},
+    {"name": "shape", "type": "str", "desc": "Primitive type (cube, sphere, cylinder, cone, torus, plane, circle, grid, monkey, bezier_curve, nurbs_curve, path, nurbs_surface, metaball, text, lattice, empty, light, camera, speaker, armature, grease_pencil, etc.)"},
+    {"name": "kwargs", "type": "dict", "desc": "Additional operator arguments (optional)"}
+])
 def handle_create_object(params):
-    """Create a new object in the scene."""
-    name = params.get("name", "Cube")
-    mesh = bpy.data.meshes.new(name)
-    obj = bpy.data.objects.new(name, mesh)
-    bpy.context.scene.collection.objects.link(obj)
-    return {"status": "ok", "result": f"Object {name} created"}
+    """Create a new object in the scene. Supports all Blender primitive types via the 'shape' parameter. Optionally pass operator kwargs."""
+    name = params.get("name", "Object")
+    shape = params.get("shape", None)
+    kwargs = params.get("kwargs", {})
+    obj = None
+    if shape:
+        shape = shape.lower()
+        primitive_ops = {
+            # Mesh
+            "cube": bpy.ops.mesh.primitive_cube_add,
+            "uv_sphere": bpy.ops.mesh.primitive_uv_sphere_add,
+            "ico_sphere": bpy.ops.mesh.primitive_ico_sphere_add,
+            "cylinder": bpy.ops.mesh.primitive_cylinder_add,
+            "cone": bpy.ops.mesh.primitive_cone_add,
+            "torus": bpy.ops.mesh.primitive_torus_add,
+            "plane": bpy.ops.mesh.primitive_plane_add,
+            "circle": bpy.ops.mesh.primitive_circle_add,
+            "grid": bpy.ops.mesh.primitive_grid_add,
+            "monkey": bpy.ops.mesh.primitive_monkey_add,
+            # Curve
+            "bezier_curve": bpy.ops.curve.primitive_bezier_curve_add,
+            "bezier_circle": bpy.ops.curve.primitive_bezier_circle_add,
+            "nurbs_curve": bpy.ops.curve.primitive_nurbs_curve_add,
+            "nurbs_circle": bpy.ops.curve.primitive_nurbs_circle_add,
+            "path": bpy.ops.curve.primitive_nurbs_path_add,
+            # Surface
+            "nurbs_surface": bpy.ops.surface.primitive_nurbs_surface_surface_add,
+            "nurbs_surface_circle": bpy.ops.surface.primitive_nurbs_surface_circle_add,
+            "nurbs_surface_curve": bpy.ops.surface.primitive_nurbs_surface_curve_add,
+            "nurbs_surface_cylinder": bpy.ops.surface.primitive_nurbs_surface_cylinder_add,
+            "nurbs_surface_sphere": bpy.ops.surface.primitive_nurbs_surface_sphere_add,
+            "nurbs_surface_torus": bpy.ops.surface.primitive_nurbs_surface_torus_add,
+            # Metaball
+            "metaball": bpy.ops.object.metaball_add,
+            # Text
+            "text": bpy.ops.object.text_add,
+            # Lattice
+            "lattice": bpy.ops.object.add,  # type='LATTICE'
+            # Empty
+            "empty": bpy.ops.object.empty_add,
+            # Light
+            "light": bpy.ops.object.light_add,
+            # Camera
+            "camera": bpy.ops.object.camera_add,
+            # Speaker
+            "speaker": bpy.ops.object.speaker_add,
+            # Armature
+            "armature": bpy.ops.object.armature_add,
+            # Grease Pencil
+            "grease_pencil": bpy.ops.object.gpencil_add,
+        }
+        op = primitive_ops.get(shape)
+        try:
+            if op:
+                # Some ops require type argument
+                if shape == "lattice":
+                    op(type='LATTICE', **kwargs)
+                elif shape == "light":
+                    op(type=kwargs.get('type', 'POINT'), **kwargs)
+                elif shape == "empty":
+                    op(type=kwargs.get('type', 'PLAIN_AXES'), **kwargs)
+                else:
+                    op(**kwargs)
+                obj = bpy.context.active_object
+                if obj:
+                    obj.name = name
+            else:
+                return {"status": "error", "message": f"Unsupported shape: {shape}"}
+        except Exception as e:
+            return {"status": "error", "message": f"Error creating {shape}: {e}"}
+    else:
+        mesh = bpy.data.meshes.new(name)
+        obj = bpy.data.objects.new(name, mesh)
+        bpy.context.scene.collection.objects.link(obj)
+    if obj:
+        return {"status": "ok", "result": f"Object {obj.name} created", "object_name": obj.name, "object_type": obj.type}
+    else:
+        return {"status": "error", "message": "Object creation failed"}
 
 @tool(name="delete_object", description="Delete an object from the scene.", args=[{"name": "name", "type": "str", "desc": "Object name"}])
 def handle_delete_object(params):
@@ -260,10 +336,11 @@ def handle_clear_scene(params):
         # Remove all objects directly
         for obj in list(bpy.data.objects):
             try:
+                obj_name = obj.name  # Store name before removal
                 bpy.data.objects.remove(obj, do_unlink=True)
-                log(f"[MCP] Removed object: {obj.name}")
+                log(f"[MCP] Removed object: {obj_name}")
             except Exception as e:
-                log(f"[MCP] Error removing object {obj.name}: {e}")
+                log(f"[MCP] Error removing object: {e}")
         log("[MCP] All objects removed from bpy.data.objects.")
         # Purge orphans with delay
         for i in range(3):
@@ -292,6 +369,206 @@ def handle_run_nl_command(params):
     log(f"[MCP] Received NL command: {cmd}")
     return {"status": "error", "message": "Natural language command execution not implemented yet."}
 
+@tool(name="sculpt_object", description="Apply sculpting operation to an object.", args=[{"name": "object", "type": "str", "desc": "Object name"}, {"name": "brush", "type": "str", "desc": "Brush type"}, {"name": "stroke", "type": "dict", "desc": "Stroke parameters"}])
+def handle_sculpt_object(params):
+    """Apply a sculpting operation to an object using a specified brush and stroke parameters."""
+    obj_name = params.get("object")
+    brush = params.get("brush", "DRAW")
+    stroke = params.get("stroke", {})
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='SCULPT')
+        bpy.context.tool_settings.sculpt.brush = getattr(bpy.data.brushes, brush, bpy.data.brushes[0].name)
+        bpy.ops.sculpt.brush_stroke(stroke=stroke)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return {"status": "ok", "result": f"Sculpted {obj_name} with {brush}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="edit_mesh", description="Apply mesh modeling operation.", args=[{"name": "object", "type": "str"}, {"name": "operation", "type": "str"}, {"name": "kwargs", "type": "dict"}])
+def handle_edit_mesh(params):
+    """Apply a mesh modeling operation (extrude, subdivide, bevel, etc.) to an object."""
+    obj_name = params.get("object")
+    operation = params.get("operation")
+    kwargs = params.get("kwargs", {})
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        op = getattr(bpy.ops.mesh, operation, None)
+        if not op:
+            return {"status": "error", "message": f"Unsupported mesh operation: {operation}"}
+        op(**kwargs)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return {"status": "ok", "result": f"Applied {operation} to {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="add_modifier", description="Add a modifier to an object.", args=[{"name": "object", "type": "str"}, {"name": "modifier", "type": "str"}, {"name": "kwargs", "type": "dict"}])
+def handle_add_modifier(params):
+    """Add a modifier to an object."""
+    obj_name = params.get("object")
+    modifier = params.get("modifier")
+    kwargs = params.get("kwargs", {})
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        mod = obj.modifiers.new(name=modifier, type=modifier.upper())
+        for k, v in kwargs.items():
+            setattr(mod, k, v)
+        return {"status": "ok", "result": f"Added {modifier} modifier to {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="apply_modifier", description="Apply a modifier on an object.", args=[{"name": "object", "type": "str"}, {"name": "modifier", "type": "str"}])
+def handle_apply_modifier(params):
+    """Apply a modifier on an object."""
+    obj_name = params.get("object")
+    modifier = params.get("modifier")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_apply(modifier=modifier)
+        return {"status": "ok", "result": f"Applied {modifier} modifier on {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="add_keyframe", description="Insert a keyframe for an object's property.", args=[{"name": "object", "type": "str"}, {"name": "data_path", "type": "str"}, {"name": "frame", "type": "int"}])
+def handle_add_keyframe(params):
+    """Insert a keyframe for an object's property at a given frame."""
+    obj_name = params.get("object")
+    data_path = params.get("data_path")
+    frame = params.get("frame")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        obj.keyframe_insert(data_path=data_path, frame=frame)
+        return {"status": "ok", "result": f"Keyframe inserted for {obj_name} at frame {frame}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="set_animation", description="Set animation data for an object.", args=[{"name": "object", "type": "str"}, {"name": "action", "type": "str"}])
+def handle_set_animation(params):
+    """Set animation action for an object."""
+    obj_name = params.get("object")
+    action = params.get("action")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        act = bpy.data.actions.get(action)
+        if not act:
+            return {"status": "error", "message": f"Action {action} not found"}
+        obj.animation_data_create()
+        obj.animation_data.action = act
+        return {"status": "ok", "result": f"Set animation {action} for {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="play_animation", description="Play the animation timeline.", args=[])
+def handle_play_animation(params):
+    """Play the animation timeline."""
+    try:
+        bpy.ops.screen.animation_play()
+        return {"status": "ok", "result": "Animation playing"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="set_uv", description="Set UV mapping for an object.", args=[{"name": "object", "type": "str"}])
+def handle_set_uv(params):
+    """Unwrap UVs for an object."""
+    obj_name = params.get("object")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.uv.unwrap()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return {"status": "ok", "result": f"UV unwrapped for {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="bake_texture", description="Bake texture for an object.", args=[{"name": "object", "type": "str"}, {"name": "bake_type", "type": "str"}])
+def handle_bake_texture(params):
+    """Bake a texture for an object."""
+    obj_name = params.get("object")
+    bake_type = params.get("bake_type", "COMBINED")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.bake(type=bake_type)
+        return {"status": "ok", "result": f"Baked {bake_type} texture for {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="add_constraint", description="Add a constraint to an object.", args=[{"name": "object", "type": "str"}, {"name": "constraint", "type": "str"}, {"name": "kwargs", "type": "dict"}])
+def handle_add_constraint(params):
+    """Add a constraint to an object."""
+    obj_name = params.get("object")
+    constraint = params.get("constraint")
+    kwargs = params.get("kwargs", {})
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        con = obj.constraints.new(type=constraint.upper())
+        for k, v in kwargs.items():
+            setattr(con, k, v)
+        return {"status": "ok", "result": f"Added {constraint} constraint to {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="add_particle_system", description="Add a particle system to an object.", args=[{"name": "object", "type": "str"}, {"name": "settings", "type": "str"}])
+def handle_add_particle_system(params):
+    """Add a particle system to an object."""
+    obj_name = params.get("object")
+    settings = params.get("settings")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        psys = obj.modifiers.new(name="ParticleSystem", type='PARTICLE_SYSTEM')
+        psys.particle_system.settings = bpy.data.particles.get(settings)
+        return {"status": "ok", "result": f"Added particle system to {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@tool(name="add_physics", description="Add a physics property to an object.", args=[{"name": "object", "type": "str"}, {"name": "physics_type", "type": "str"}])
+def handle_add_physics(params):
+    """Add a physics property (rigid body, soft body, cloth, etc.) to an object."""
+    obj_name = params.get("object")
+    physics_type = params.get("physics_type")
+    try:
+        obj = bpy.data.objects.get(obj_name)
+        if not obj:
+            return {"status": "error", "message": f"Object {obj_name} not found"}
+        if physics_type == 'RIGID_BODY':
+            bpy.ops.rigidbody.object_add()
+        elif physics_type == 'SOFT_BODY':
+            bpy.ops.object.modifier_add(type='SOFT_BODY')
+        elif physics_type == 'CLOTH':
+            bpy.ops.object.modifier_add(type='CLOTH')
+        elif physics_type == 'FLUID':
+            bpy.ops.object.modifier_add(type='FLUID')
+        else:
+            return {"status": "error", "message": f"Unsupported physics type: {physics_type}"}
+        return {"status": "ok", "result": f"Added {physics_type} physics to {obj_name}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 COMMAND_DISPATCHER = {
     "create_object": handle_create_object,
     "delete_object": handle_delete_object,
@@ -306,6 +583,18 @@ COMMAND_DISPATCHER = {
     "clear_scene": handle_clear_scene,
     "get_job_status": handle_get_job_status,
     "run_nl_command": handle_run_nl_command,
+    "sculpt_object": handle_sculpt_object,
+    "edit_mesh": handle_edit_mesh,
+    "add_modifier": handle_add_modifier,
+    "apply_modifier": handle_apply_modifier,
+    "add_keyframe": handle_add_keyframe,
+    "set_animation": handle_set_animation,
+    "play_animation": handle_play_animation,
+    "set_uv": handle_set_uv,
+    "bake_texture": handle_bake_texture,
+    "add_constraint": handle_add_constraint,
+    "add_particle_system": handle_add_particle_system,
+    "add_physics": handle_add_physics,
     # ...add more handlers for full API coverage...
 }
 
