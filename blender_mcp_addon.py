@@ -21,6 +21,7 @@ import time
 import logging
 import os
 import uuid
+import inspect
 
 DEFAULT_PORT = 9876  # Added to fix NameError and provide a default port for the server
 
@@ -38,11 +39,20 @@ except ImportError:
     geometry_script = None
 
 # --- Logging Setup ---
-LOG_PATH = os.path.join(os.path.expanduser("~"), "mcp_blender.log")
-logging.basicConfig(filename=LOG_PATH, level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+# Write logs to workspace directory and clear on each register
+WORKSPACE_LOG_PATH = os.path.join(r"I:\Repo\Gametest2", "mcp_blender.log")
+def setup_logging():
+    # Overwrite log file on each (re)register
+    with open(WORKSPACE_LOG_PATH, 'w') as f:
+        f.write("")
+    logging.basicConfig(filename=WORKSPACE_LOG_PATH, level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s", force=True)
+
 def log(msg):
     print(msg)
     logging.debug(msg)
+
+# Call setup_logging on import and on register
+setup_logging()
 
 # --- Protocol Version ---
 MCP_PROTOCOL_VERSION = "2.0"
@@ -87,7 +97,7 @@ bpy.app.timers.register(process_job_queue, persistent=True)
 # --- Configurable Security/Performance Options ---
 MAX_MESSAGE_SIZE = 2 * 1024 * 1024  # 2MB
 ALLOWED_IPS = {"127.0.0.1", "localhost"}  # Set to None to allow all
-MAX_CONNECTIONS = 10
+MAX_CONNECTIONS = 50
 
 # --- Chunked Upload State ---
 UPLOADS = {}  # upload_id -> {'chunks': [], 'start_time': float}
@@ -163,26 +173,48 @@ def handle_create_object(params):
     if shape:
         shape = shape.lower()
         if shape in MESH_PRIMITIVE_NAMES:
-            # Use operator for all mesh primitives (robust, future-proof)
             op = get_mesh_primitive_op(shape)
             if op:
                 try:
-                    op(**kwargs)
-                    obj = bpy.context.active_object
+                    # --- PATCH: Only pass supported args to operator ---
+                    # Get operator signature
+                    op_sig = inspect.signature(op)
+                    op_params = set(op_sig.parameters.keys())
+                    # Filter kwargs for operator
+                    op_kwargs = {k: v for k, v in kwargs.items() if k in op_params}
+                    extra_kwargs = {k: v for k, v in kwargs.items() if k not in op_params}
+                    before_objs = set(bpy.data.objects)
+                    op(**op_kwargs)
+                    after_objs = set(bpy.data.objects)
+                    new_objs = after_objs - before_objs
+                    obj = None
+                    if new_objs:
+                        obj = new_objs.pop()
+                        # --- PATCH: Set extra transform properties after creation ---
+                        for k, v in extra_kwargs.items():
+                            try:
+                                if hasattr(obj, k):
+                                    setattr(obj, k, v)
+                                elif hasattr(obj, 'rotation_euler') and k == 'rotation_euler':
+                                    obj.rotation_euler = v
+                                elif hasattr(obj, 'scale') and k == 'scale':
+                                    obj.scale = v
+                                elif hasattr(obj, 'location') and k == 'location':
+                                    obj.location = v
+                                else:
+                                    log(f"[WARN] Unknown property '{k}' for object {obj.name}")
+                            except Exception as e:
+                                log(f"[WARN] Failed to set property '{k}' on {obj.name}: {e}")
+                        if name:
+                            obj.name = name
+                        return {"status": "ok", "result": f"Object {obj.name} created", "object_name": obj.name, "object_type": obj.type}
+                    else:
+                        return {"status": "error", "message": f"No object created by mesh primitive operator for shape '{shape}'"}
                 except Exception as e:
-                    log(f"[MCP] Error creating mesh primitive {shape}: {e}")
                     return {"status": "error", "message": f"Error creating mesh primitive {shape}: {e}"}
             else:
                 log(f"[MCP] Mesh primitive operator not found for: {shape}")
                 return {"status": "error", "message": f"Mesh primitive operator not found for: {shape}"}
-            if obj:
-                # Set location/scale after creation for consistency
-                if "location" in kwargs:
-                    obj.location = kwargs["location"]
-                if "scale" in kwargs:
-                    obj.scale = kwargs["scale"]
-                bpy.context.scene.collection.objects.link(obj)
-                obj.name = name
         else:
             # Non-mesh primitives: use operator as before
             primitive_ops = {
@@ -884,6 +916,7 @@ classes = [
 ]
 
 def register():
+    setup_logging()
     for cls in classes:
         bpy.utils.register_class(cls)
     print("[MCP] Addon registered.")
